@@ -1,0 +1,160 @@
+clc;
+clear;
+
+%% =========================
+%  1. 定义符号变量
+%  =========================
+syms X Y Z t t1 t2 real
+syms a b c d e f real              % pr(t1), pr(t3)
+syms g h i j k l real              % pr_dot(t1), pr_dot(t3)
+syms R lambda fd real
+syms Rm hm c0 real                 % 月球半径、目标高程、光速
+
+% 欧拉角三次多项式系数
+syms a_psi b_psi c_psi d_psi real
+syms a_theta b_theta c_theta d_theta real
+syms a_phi b_phi c_phi d_phi real
+
+%% =========================
+%  2. 定义欧拉角关于一般时间 t 的表达式
+%  =========================
+psi_t   = a_psi   + b_psi*t   + c_psi*t^2   + d_psi*t^3;
+theta_t = a_theta + b_theta*t + c_theta*t^2 + d_theta*t^3;
+phi_t   = a_phi   + b_phi*t   + c_phi*t^2   + d_phi*t^3;
+
+%% =========================
+%  3. 定义旋转矩阵 Tran(t)
+%  =========================
+Rz_psi = [ cos(psi_t),  sin(psi_t), 0;
+          -sin(psi_t),  cos(psi_t), 0;
+                 0,          0,     1];
+
+Rx_theta = [1,      0,           0;
+            0, cos(theta_t),  sin(theta_t);
+            0,-sin(theta_t),  cos(theta_t)];
+
+Rz_phi = [ cos(phi_t),  sin(phi_t), 0;
+          -sin(phi_t),  cos(phi_t), 0;
+               0,           0,      1];
+
+Tran_t = Rz_psi * Rx_theta * Rz_phi;
+
+%% =========================
+%  4. 构造 pt(t) 及其一阶导数 pt_dot(t)
+%  =========================
+pt_t = Tran_t * [X; Y; Z];
+dpt_t = diff(pt_t, t);
+
+%% =========================
+%  5. 在 t = t2 处取值
+%  =========================
+pt_t2  = subs(pt_t,  t, t2);
+dpt_t2 = subs(dpt_t, t, t2);
+
+%% =========================
+%  6. 构造已知向量
+%  =========================
+pr1  = [a; b; c];      % pr(t1)
+pr3  = [d; e; f];      % pr(t3)
+
+vpr1 = [g; h; i];      % pr_dot(t1)
+vpr3 = [j; k; l];      % pr_dot(t3)
+
+%% =========================
+%  7. 构造距离量
+%  =========================
+range1 = sqrt((pr1(1)-pt_t2(1))^2 + (pr1(2)-pt_t2(2))^2 + (pr1(3)-pt_t2(3))^2);
+range2 = sqrt((pt_t2(1)-pr3(1))^2 + (pt_t2(2)-pr3(2))^2 + (pt_t2(3)-pr3(3))^2);
+
+%% =========================
+%  8. 构造 F1
+%  F1 = |pr(t1)-pt(t2)| + |pt(t2)-pr(t3)| - R = 0
+%  =========================
+F1 = range1 + range2 - R;
+F1 = simplify(F1);
+
+%% =========================
+%  9. 构造 F2
+%  F2 = 1/(lambda*|pt(t2)-pr(t1)|) * (pt(t2)-pr(t1))'*(pr_dot(t1)-pt_dot(t2))
+%     + 1/(lambda*|pr(t3)-pt(t2)|) * (pr(t3)-pt(t2))'*(pt_dot(t2)-pr_dot(t3))
+%     - fd = 0
+%  =========================
+term1 = ((pt_t2 - pr1).' * (vpr1 - dpt_t2)) / (lambda * range1);
+term2 = ((pr3 - pt_t2).' * (dpt_t2 - vpr3)) / (lambda * range2);
+
+F2 = term1 + term2 - fd;
+F2 = simplify(F2);
+
+%% =========================
+% 10. 构造 F3
+%  F3 = |pt(t2)|^2 - (Rm + hm)^2 = 0
+%  =========================
+F3 = pt_t2(1)^2 + pt_t2(2)^2 + pt_t2(3)^2 - (Rm + hm)^2;
+F3 = simplify(F3);
+
+%% =========================
+% 11. 构造 F4
+%  F4 = |pr(t1)-pt(t2)| - c0*(t2 - t1) = 0
+%  =========================
+F4 = range1 - c0*(t2 - t1);
+F4 = simplify(F4);
+
+%% =========================
+% 12. 组合四个方程
+%  =========================
+F = [F1; F2; F3; F4];
+
+% %% =========================
+% % 13. 显示结果
+% %  =========================
+% disp('F1 = ');
+% disp(F1);
+% 
+% disp('F2 = ');
+% disp(F2);
+% 
+% disp('F3 = ');
+% disp(F3);
+% 
+% disp('F4 = ');
+% disp(F4);
+% 
+% disp('F = ');
+% disp(F);
+
+%% =========================
+%  构造雅可比矩阵
+%  =========================
+vars = [X; Y; Z; t2];
+J = jacobian(F, vars);
+J = simplify(J);
+
+disp('Jacobian J = ');
+disp(J);
+%  构造
+F_fun = matlabFunction(F, 'Vars', { ...
+    X, Y, Z, t2, ...
+    a, b, c, d, e, f, ...
+    g, h, i, j, k, l, ...
+    R, lambda, fd, ...
+    Rm, hm, c0, t1, ...
+    a_psi, b_psi, c_psi, d_psi, ...
+    a_theta, b_theta, c_theta, d_theta, ...
+    a_phi, b_phi, c_phi, d_phi});
+
+J_fun = matlabFunction(J, 'Vars', { ...
+    X, Y, Z, t2, ...
+    a, b, c, d, e, f, ...
+    g, h, i, j, k, l, ...
+    R, lambda, fd, ...
+    Rm, hm, c0, t1, ...
+    a_psi, b_psi, c_psi, d_psi, ...
+    a_theta, b_theta, c_theta, d_theta, ...
+    a_phi, b_phi, c_phi, d_phi});
+
+
+
+
+
+
+
