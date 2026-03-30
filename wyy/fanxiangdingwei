@@ -1,0 +1,352 @@
+clc;clear;
+Rm = 1737400;          % 月球半径
+
+% 研究目标的经纬度（为了简化计算过程，真正的场景中心会被设置为截取的DEM数据矩阵的中心，并不会完全等于这个取值）
+target = [-11,-43];                                                 % 研究目标的经纬度【经度，纬度】（°）
+globalDEM_path = './DEM_global_moon.mat';
+%% 研究目标位置附近DEM数据截取
+% 截取经纬度范围
+lon_range = [target(1)-10,target(1)+10];      % 截取经度范围（°）
+lat_range = [target(2)+10,target(2)-10];      % 截取纬度范围（°）
+% 构建经纬度坐标轴
+lon_lat_range=[lon_range,lat_range];
+
+% 截取DEM数据
+DEM = DEM_crop_fun(globalDEM_path,lon_lat_range);
+% 读取DEM中心点经纬度和高程
+[center_lon, center_lat, center_h, row_c, col_c, lon1, lat1] = get_dem_center(DEM, lon_lat_range);
+
+% center_x = (Rm+center_h).*cosd(center_lat).*cosd(center_lon);  %中心点的x坐标
+% center_y = (Rm+center_h).*cosd(center_lat).*sind(center_lon);  %中心点的y坐标
+% center_z = (Rm+center_h).*sind(center_lat);                    %中心点的z坐标
+% P_center = [center_x; center_y; center_z];
+
+% 目标点月固系经纬高（这里只作为目标固定点的几何定义）
+lon=-1.1;lat=-52.8;
+h = interp2(lon1, lat1, DEM, lon, lat, 'linear');
+
+EARTH_emp_path = 'C:\Users\eric\Desktop\ToWYY\数据\WGC_StateVector_20260312022150.csv';
+% 欧拉角星历
+Euler_emp_path = 'C:\Users\eric\Desktop\ToWYY\数据\WGC_FrameTransformation_20260312022956.csv';
+% 星历采样间隔
+dt_ephem = 1;          % s
+% 雷达脉冲重复时间
+PRT = 10e-3;           % s
+c0 = 299792458;        % 光速 (m/s)
+load('C:\Users\eric\Desktop\wyy\各种已知量\dpt_t.mat')
+load('C:\Users\eric\Desktop\wyy\各种已知量\ddpt_t.mat')
+
+x = (Rm+h).*cosd(lat).*cosd(lon);  %任意点的x坐标
+y = (Rm+h).*cosd(lat).*sind(lon);  %任意点的y坐标
+z = (Rm+h).*sind(lat);                    %任意点的z坐标
+%目标点的MCMF坐标
+P_x = [x; y; z];
+
+%% =========================
+% 3. 读取雷达在MCI下的星历，并拟合三阶多项式
+% =========================
+[Shike_Line_Str, XYZ] = nasa_csv_read(EARTH_emp_path);
+
+% 读取欧拉角数据
+[Shike_Line_Str_Euler, Euler_Angles] = nasa_csv_euler_read(Euler_emp_path);
+x_Radar_MCI = XYZ(:,1) * 1000;   % km -> m
+y_Radar_MCI = XYZ(:,2) * 1000;
+z_Radar_MCI = XYZ(:,3) * 1000;
+
+Ttotal = length(x_Radar_MCI);
+t_raw = 0:dt_ephem:(Ttotal-1)*dt_ephem;
+T_end = t_raw(end);
+
+ta = 0:PRT:T_end;
+idx_t1 = round(length(ta)/2);
+t1 = ta(idx_t1);
+
+% 雷达三阶拟合
+x_par_radar = polyfit(t_raw, x_Radar_MCI, 3);
+y_par_radar = polyfit(t_raw, y_Radar_MCI, 3);
+z_par_radar = polyfit(t_raw, z_Radar_MCI, 3);
+
+% 雷达在 t1 时刻的 MCI 坐标
+xr_t1 = polyval(x_par_radar, t1);
+yr_t1 = polyval(y_par_radar, t1);
+zr_t1 = polyval(z_par_radar, t1);
+
+pr_t1 = [xr_t1; yr_t1; zr_t1];
+
+% 欧拉角：度 -> 弧度
+psi_raw   = Euler_Angles(:,1) * pi / 180;   % Angle 3
+theta_raw = Euler_Angles(:,2) * pi / 180;   % Angle 2
+phi_raw   = Euler_Angles(:,3) * pi / 180;   % Angle 1
+
+% 三阶多项式拟合
+psi_par   = polyfit(t_raw, psi_raw.', 3);
+theta_par = polyfit(t_raw, theta_raw.', 3);
+phi_par   = polyfit(t_raw, phi_raw.', 3);
+
+% 提取系数
+d_psi0 = psi_par(1);     c_psi0 = psi_par(2);     b_psi0 = psi_par(3);     a_psi0 = psi_par(4);
+d_theta0 = theta_par(1); c_theta0 = theta_par(2); b_theta0 = theta_par(3); a_theta0 = theta_par(4);
+d_phi0 = phi_par(1);     c_phi0 = phi_par(2);     b_phi0 = phi_par(3);     a_phi0 = phi_par(4);
+
+%% ============================================
+% 已知量
+% P_x           : 目标在月心月固系(MCMF)下的固定坐标 [3x1]
+% t1            : 发射时刻
+% c0            : 光速
+% x_par_radar   : 雷达x(t)三阶拟合系数 [1x4]
+% y_par_radar   : 雷达y(t)三阶拟合系数 [1x4]
+% z_par_radar   : 雷达z(t)三阶拟合系数 [1x4]
+%
+% 欧拉角拟合系数：
+% psi(t)   = d_psi*t^3   + c_psi*t^2   + b_psi*t   + a_psi
+% theta(t) = d_theta*t^3 + c_theta*t^2 + b_theta*t + a_theta
+% phi(t)   = d_phi*t^3   + c_phi*t^2   + b_phi*t   + a_phi
+
+%% ---------- 欧拉角函数 ----------
+psi_fun   = @(t) d_psi0   * t.^3 + c_psi0   * t.^2 + b_psi0   * t + a_psi0;
+theta_fun = @(t) d_theta0 * t.^3 + c_theta0 * t.^2 + b_theta0 * t + a_theta0;
+phi_fun   = @(t) d_phi0   * t.^3 + c_phi0   * t.^2 + b_phi0   * t + a_phi0;
+
+%% ---------- 基本旋转矩阵 ----------
+Rz = @(ang) [ cos(ang), sin(ang), 0;
+              -sin(ang),  cos(ang), 0;
+                   0   ,      0   , 1 ];
+Rx = @(ang) [1,     0     ,      0    ;
+             0, cos(ang), sin(ang);
+             0, -sin(ang),  cos(ang)];
+
+%% ---------- 月固系 -> MCI 的旋转矩阵函数 ----------
+% !!! 这里必须按照你文档中的确切公式替换 !!!
+% 下面只是“代码框架”，不是最终唯一正确的旋转顺序
+R_mcmf2mci = @(t) Rz(psi_fun(t)) * Rx(theta_fun(t)) * Rz(phi_fun(t));
+
+%% ---------- 目标在 t 时刻的 MCI 坐标函数 ----------
+pt_fun = @(t) R_mcmf2mci(t) * P_x;
+
+%% ---------- 构造方程4：去程延时方程 ----------
+% || pt(t2) - pr(t1) || = c0 * (t2 - t1)
+fun_t2 = @(t) norm(pt_fun(t) - pr_t1) - c0 * (t - t1);
+
+%% ---------- 初值 ----------
+% 可直接用“t1 + 场景中心单程传播时延”；
+% 若当前只想先跑通程序，也可先用 P_x_sol 对应的近似单程斜距构造初值
+R1_init = norm(pt_fun(t1) - pr_t1);
+t2_init = t1 + R1_init / c0;
+
+%% ---------- 求解 t2 ----------
+t222 = fzero(fun_t2, t2_init);
+
+%% ---------- 求解完成后，得到 t2 时刻目标在 MCI 下的坐标 ----------
+pt_t2 = pt_fun(t222);
+pt_t1 = pt_fun(t1);
+
+%% ---------- 去程斜距 ----------
+R1 = norm(pt_t2 - pr_t1);
+R1_check = c0 * (t222 - t1);
+
+%% ---------- 输出 ----------
+fprintf('\n===== Solve t2 by Eq.(F4) =====\n');
+fprintf('t1       = %.12f s\n', t1);
+fprintf('t2       = %.12f s\n', t222);
+fprintf('R1       = %.6f m\n', R1);
+fprintf('R1_check = %.6f m\n', R1_check);
+fprintf('abs(R1 - R1_check) = %.6e m\n', abs(R1 - R1_check));
+
+%% =========================
+% 8. 求解 t3 和回程斜距 R2
+%    方程：|| pr(t3) - pt(t2) || = c0 * (t3 - t2)
+% =========================
+
+% ---------- 雷达在 t3 时刻的 MCI 坐标函数 ----------
+xr_t3 = @(t) x_par_radar(1)*t.^3 + x_par_radar(2)*t.^2 + x_par_radar(3)*t + x_par_radar(4);
+yr_t3 = @(t) y_par_radar(1)*t.^3 + y_par_radar(2)*t.^2 + y_par_radar(3)*t + y_par_radar(4);
+zr_t3 = @(t) z_par_radar(1)*t.^3 + z_par_radar(2)*t.^2 + z_par_radar(3)*t + z_par_radar(4);
+
+
+% ---------- 构造求解 t3 的方程 ----------
+% ||pr(t3) - pt(t2)|| = c0 * (t3 - t2)
+fun_t3 = @(t) sqrt( ...
+    (xr_t3(t) - pt_t2(1)).^2 + ...
+    (yr_t3(t) - pt_t2(2)).^2 + ...
+    (zr_t3(t) - pt_t2(3)).^2 ) ...
+    - c0 * (t - t222);
+
+% ---------- t3 初值 ----------
+t3_init = t1 + 2*R1/c0;
+
+% ---------- 用 fzero 求解 t3 ----------
+t3 = fzero(fun_t3, t3_init);
+
+% ---------- 雷达在 t3 时刻的 MCI 坐标 ----------
+pr_t3 = [xr_t3(t3); yr_t3(t3); zr_t3(t3)];
+
+% ---------- 第二程斜距 R2 ----------
+R2 = norm(pr_t3 - pt_t2);
+
+% ---------- 校验 ----------
+R2_check = c0 * (t3 - t222);
+
+% ---------- 双程斜距 ----------
+R0 = R1 + R2;
+
+% ---------- “停走”双程斜距 ----------
+rvec = pr_t1 - pt_t1;
+range1 = sqrt(rvec(1)^2 + rvec(2)^2 + rvec(3)^2);
+R_stop_go = 2*range1;
+
+% ---------- 输出 ----------
+fprintf('\n===== Return path result =====\n');
+fprintf('t3 = %.12f s\n', t3);
+fprintf('R2 = %.6f m\n', R2);
+fprintf('R2_check = %.6f m\n', R2_check);
+fprintf('abs(R2 - R2_check) = %.6e m\n', abs(R2 - R2_check));
+fprintf('R = R1 + R2 = %.6f m\n', R0);
+fprintf('R_stop_go = %.6f m\n', R_stop_go);
+fprintf('对于某个目标点的距离定位误差ΔR = %.6f m\n', R0 - R_stop_go);
+
+
+
+%% =========================
+% 9. 计算 F2 中理论多普勒频率 fd
+
+% 欧拉角三次多项式系数
+syms a_psi b_psi c_psi d_psi real
+syms a_theta b_theta c_theta d_theta real
+syms a_phi b_phi c_phi d_phi real
+syms X Y Z t real
+
+const_syms = [ ...
+    a_psi, b_psi, c_psi, d_psi, ...
+    a_theta, b_theta, c_theta, d_theta, ...
+    a_phi, b_phi, c_phi, d_phi];
+
+const_vals = [ ...
+    a_psi0, b_psi0, c_psi0, d_psi0, ...
+    a_theta0, b_theta0, c_theta0, d_theta0, ...
+    a_phi0, b_phi0, c_phi0, d_phi0];
+%将常量替换掉
+dpt_t_num_sym = subs(dpt_t, const_syms, const_vals);
+
+% 数值函数句柄
+dpt_t_num_sym_handle = matlabFunction(dpt_t_num_sym, 'Vars', {X, Y, Z, t});
+vt_t2 = dpt_t_num_sym_handle(P_x(1),P_x(2),P_x(3),t222);
+vt_t1 = dpt_t_num_sym_handle(P_x(1),P_x(2),P_x(3),t1);
+
+%将常量替换掉
+ddpt_t_num_sym = subs(ddpt_t, const_syms, const_vals);
+
+% 数值函数句柄
+ddpt_t_num_sym_handle = matlabFunction(ddpt_t_num_sym, 'Vars', {X, Y, Z, t});
+ddpt_t1 = ddpt_t_num_sym_handle(P_x(1),P_x(2),P_x(3),t1);
+
+
+
+fc = 3.12e9;              % 雷达工作频率 (Hz)
+lambda = c0 / fc;         % 波长 (m)
+
+% ---------- 雷达在 t1 时刻速度 ----------
+Vx_t1 = 3*x_par_radar(1)*t1^2 + 2*x_par_radar(2)*t1 + x_par_radar(3);
+Vy_t1 = 3*y_par_radar(1)*t1^2 + 2*y_par_radar(2)*t1 + y_par_radar(3);
+Vz_t1 = 3*z_par_radar(1)*t1^2 + 2*z_par_radar(2)*t1 + z_par_radar(3);
+vr_t1 = [Vx_t1; Vy_t1; Vz_t1];
+vrel  = vr_t1 - vt_t1;
+
+% ---------- 目标在 t2 时刻速度 ----------
+% Vx_t2 = 3*x_par_target(1)*t2^2 + 2*x_par_target(2)*t2 + x_par_target(3);
+% Vy_t2 = 3*y_par_target(1)*t2^2 + 2*y_par_target(2)*t2 + y_par_target(3);
+% Vz_t2 = 3*z_par_target(1)*t2^2 + 2*z_par_target(2)*t2 + z_par_target(3);
+% vt_t2 = [Vx_t2; Vy_t2; Vz_t2];
+
+% ---------- 雷达在 t3 时刻速度 ----------
+Vx_t3 = 3*x_par_radar(1)*t3^2 + 2*x_par_radar(2)*t3 + x_par_radar(3);
+Vy_t3 = 3*y_par_radar(1)*t3^2 + 2*y_par_radar(2)*t3 + y_par_radar(3);
+Vz_t3 = 3*z_par_radar(1)*t3^2 + 2*z_par_radar(2)*t3 + z_par_radar(3);
+vr_t3 = [Vx_t3; Vy_t3; Vz_t3];
+
+% ---------- 去程视线向量 ----------
+rho1 = pt_t2 - pr_t1;     % 从发射雷达到目标
+R1_check2 = norm(rho1);
+
+% ---------- 回程视线向量 ----------
+rho2 = pr_t3 - pt_t2;     % 从目标到接收雷达
+R2_check2 = norm(rho2);
+
+% ---------- 用几何距离再校验一次 ----------
+fprintf('\n===== Doppler calculation check =====\n');
+fprintf('R1(from vector) = %.6f m\n', R1_check2);
+fprintf('R2(from vector) = %.6f m\n', R2_check2);
+fprintf('abs(R1 - R1_check2) = %.6e m\n', abs(R1 - R1_check2));
+fprintf('abs(R2 - R2_check2) = %.6e m\n', abs(R2 - R2_check2));
+
+% ---------- 去程距离变化率 dR1/dt ----------
+dR1_dt = dot(rho1, (vt_t2 - vr_t1)) / R1;
+
+% ---------- 回程距离变化率 dR2/dt ----------
+dR2_dt = dot(rho2, (vr_t3 - vt_t2)) / R2;
+
+% ---------- 总距离变化率 ----------
+dR_dt = dR1_dt + dR2_dt;
+
+% ---------- 理论多普勒频率 ----------
+fd0 = - dR_dt / lambda;
+
+% ---------- 停走多普勒频率 ----------
+fd_stop_go = - 2*(dot(rvec, vrel) / norm(rvec))/ lambda;
+
+% ---------- “胡程”双程斜距 ----------
+R_hucheng = 2*range1 + 2*dot(rvec, vrel)/c0;
+fprintf('R_hucheng = %.6f m\n', R_hucheng);
+fprintf('胡程对于某个目标点的距离定位误差ΔR = %.6f m\n', R0 - R_hucheng);
+
+% ---------- “胡程”多普勒频率 ----------
+m0 = 0.020949963366868;
+n0 = -0.018952361778379;
+o0 = 0.001309525062422;
+
+apr1=[m0; n0; o0];
+arel  = apr1 - ddpt_t1;     % pr_ddot(t1) - pt_ddot(t1)
+fd_hucheng = -2/lambda * dot(rvec, vrel)/range1 ...
+     -2/(lambda*c0) * ( dot(arel, rvec) + dot(vrel, vrel) );
+
+% ---------- 输出 ----------
+fprintf('dR1_dt = %.12f m/s\n', dR1_dt);
+fprintf('dR2_dt = %.12f m/s\n', dR2_dt);
+fprintf('dR_dt  = %.12f m/s\n', dR_dt);
+fprintf('fd     = %.12f Hz\n', fd0);
+fprintf('fd_stop_go     = %.12f Hz\n', fd_stop_go);
+fprintf('fd_hucheng     = %.12f Hz\n', fd_hucheng);
+fprintf('对于某个目标点的多普勒定位误差Δfd = %.12f Hz\n', fd0 - fd_stop_go);
+fprintf('胡程对于某个目标点的多普勒定位误差Δfd = %.12f Hz\n', fd0 - fd_hucheng);
+
+
+
+% R0=R_stop_go;
+% 
+% fd0=fd_stop_go;
+
+
+%% 直接定位，利用已知的R和fd
+t333 = t1 + R0/c0;
+pr_t333 = [xr_t3(t333); yr_t3(t333); zr_t3(t333)];
+d0 = pr_t333(1);
+e0 = pr_t333(2);
+f0 = pr_t333(3);
+fprintf('Δt = %.12f s\n', abs(t3-t333));
+
+% ---------- 雷达在 t3 时刻速度 ----------
+Vx_t333 = 3*x_par_radar(1)*t333^2 + 2*x_par_radar(2)*t333 + x_par_radar(3);
+Vy_t333 = 3*y_par_radar(1)*t333^2 + 2*y_par_radar(2)*t333 + y_par_radar(3);
+Vz_t333 = 3*z_par_radar(1)*t333^2 + 2*z_par_radar(2)*t333 + z_par_radar(3);
+vr_t333 = [Vx_t333; Vy_t333; Vz_t333];
+
+j0 = Vx_t333;
+k0 = Vy_t333;
+l0 = Vz_t333;
+hm_truth = h;
+
+save('C:\Users\eric\Desktop\wyy\各种已知量\data.mat', ...
+     'd0','e0','f0','j0','k0','l0','R0','fd0','t222','P_x','hm_truth')
+% save('C:\Users\eric\Desktop\wyy\各种已知量\data_stop_go.mat', ...
+%      'R0','fd0','P_x','hm_truth')
+% save('C:\Users\eric\Desktop\wyy\各种已知量\data.mat', ...
+%      'd0','e0','f0','j0','k0','l0','R0','fd0','t222','P_x','hm_truth')
