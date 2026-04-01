@@ -1,46 +1,12 @@
-clc;clear;
-load('C:\Users\eric\Desktop\wyy\各种已知量\DEM相关\center.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\DEM相关\DEM.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\DEM相关\lat1lon1.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\F.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\J.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\Rm0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\lambda0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\i0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\h0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\g0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\c0_pr1.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\b0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\a0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\d_phi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\c_phi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\b_phi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\a_phi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\d_theta0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\c_theta0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\b_theta0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\a_theta0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\d_psi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\c_psi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\b_psi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\a_psi0.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\t10.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\球体_不变量\c_light.mat')
-load('C:\Users\eric\Desktop\wyy\各种已知量\data.mat')
+function [X_sol, Y_sol, Z_sol, t2_sol, h_sol, P_x_sol, ...
+          lon_sol, lat_sol, error_sol] = Newton2_funtion(params, F, J)
 
 %% =========================
-% 牛顿迭代完整代码（hm改为每次迭代由DEM插值更新）
-% 前提：
-% 1) 工作区中已经有符号表达式 F, J
-% 2) DEM, lon1, lat1 已知
-% 3) P_center = [center_x; center_y; center_z] 为场景中心 MCMF 坐标
-% 4) h_init 已知（例如可取 center_h）
-%% =========================
-%  1. 定义符号变量
-%  =========================
+% 1. 定义符号变量
+% =========================
 syms X Y Z t t1 t2 real
 syms a b c d e f real              % pr(t1), pr(t3)
-syms g h i j k l real              % pr_dot(t1), pr_dot(t3)
+syms g h i_s j_s k_s l_s real              % pr_dot(t1), pr_dot(t3)
 syms R lambda fd real
 syms Rm hm c0 real                 % 月球半径、目标高程、光速
 
@@ -49,10 +15,12 @@ syms a_psi b_psi c_psi d_psi real
 syms a_theta b_theta c_theta d_theta real
 syms a_phi b_phi c_phi d_phi real
 
-%% 1. 构造常量符号与常量数值（删去 hm / hm0）
+%% =========================
+% 2. 构造常量替换
+% =========================
 const_syms = [ ...
     a, b, c, d, e, f, ...
-    g, h, i, j, k, l, ...
+    g, h, i_s, j_s, k_s, l_s ...
     R, lambda, fd, ...
     Rm, c0, t1, ...
     a_psi, b_psi, c_psi, d_psi, ...
@@ -60,193 +28,140 @@ const_syms = [ ...
     a_phi, b_phi, c_phi, d_phi];
 
 const_vals = [ ...
-    a0, b0, c0_pr1, d0, e0, f0, ...
-    g0, h0, i0, j0, k0, l0, ...
-    R0, lambda0, fd0, ...
-    Rm0, c_light, t10, ...
-    a_psi0, b_psi0, c_psi0, d_psi0, ...
-    a_theta0, b_theta0, c_theta0, d_theta0, ...
-    a_phi0, b_phi0, c_phi0, d_phi0];
+    params.a0, params.b0, params.c0_pr1, params.d0, params.e0, params.f0, ...
+    params.g0, params.h0, params.i0, params.j0, params.k0, params.l0, ...
+    params.R0, params.lambda0, params.fd0, ...
+    params.Rm0, params.c_light, params.t10, ...
+    params.a_psi0, params.b_psi0, params.c_psi0, params.d_psi0, ...
+    params.a_theta0, params.b_theta0, params.c_theta0, params.d_theta0, ...
+    params.a_phi0, params.b_phi0, params.c_phi0, params.d_phi0];
 
-%% 2. 将 F、J 中常量替换掉，保留 X,Y,Z,t2,hm
+%% =========================
+% 3. 将 F、J 中常量替换掉，保留 X,Y,Z,t2,hm
+% =========================
 F_num_sym = subs(F, const_syms, const_vals);
 J_num_sym = subs(J, const_syms, const_vals);
 
-% 数值函数句柄（Vars 中加入 hm）
 F_handle = matlabFunction(F_num_sym, 'Vars', {X, Y, Z, t2, hm});
 J_handle = matlabFunction(J_num_sym, 'Vars', {X, Y, Z, t2, hm});
 
-%% 3. 初值设置
-% (1) X,Y,Z 初值：场景中心 MCMF 坐标
-X_init = center_x;
-Y_init = center_y;
-Z_init = center_z;
+%% =========================
+% 4. 初值设置
+% =========================
+X_init = params.center_x;
+Y_init = params.center_y;
+Z_init = params.center_z;
+h_init = params.center_h;
 
-% (2) h 初值：已知初值
-h_init = center_h;   % 如果你已有别的初值，就替换这里
-
-% (3) t2 初值：用 t1 时刻 MCI 坐标下雷达到场景中心的单程传播时延
-psi_t1   = a_psi0   + b_psi0*t10   + c_psi0*t10^2   + d_psi0*t10^3;
-theta_t1 = a_theta0 + b_theta0*t10 + c_theta0*t10^2 + d_theta0*t10^3;
-phi_t1   = a_phi0   + b_phi0*t10   + c_phi0*t10^2   + d_phi0*t10^3;
+psi_t1   = params.a_psi0   + params.b_psi0*params.t10   + params.c_psi0*params.t10^2   + params.d_psi0*params.t10^3;
+theta_t1 = params.a_theta0 + params.b_theta0*params.t10 + params.c_theta0*params.t10^2 + params.d_theta0*params.t10^3;
+phi_t1   = params.a_phi0   + params.b_phi0*params.t10   + params.c_phi0*params.t10^2   + params.d_phi0*params.t10^3;
 
 Rz_psi_t1 = [ ...
-     cos(psi_t1),  sin(psi_t1), 0; ...
-    -sin(psi_t1),  cos(psi_t1), 0; ...
-     0,            0,           1];
+    cos(psi_t1),  sin(psi_t1), 0; ...
+   -sin(psi_t1),  cos(psi_t1), 0; ...
+    0,            0,           1];
 
 Rx_theta_t1 = [ ...
     1, 0, 0; ...
-    0,  cos(theta_t1), sin(theta_t1); ...
-    0, -sin(theta_t1), cos(theta_t1)];
+    0,  cos(theta_t1),  sin(theta_t1); ...
+    0, -sin(theta_t1),  cos(theta_t1)];
 
 Rz_phi_t1 = [ ...
-     cos(phi_t1),  sin(phi_t1), 0; ...
-    -sin(phi_t1),  cos(phi_t1), 0; ...
-     0,            0,           1];
+    cos(phi_t1),  sin(phi_t1), 0; ...
+   -sin(phi_t1),  cos(phi_t1), 0; ...
+    0,            0,           1];
 
 Tran_t1 = Rz_psi_t1 * Rx_theta_t1 * Rz_phi_t1;
 
-% 场景中心在 t1 时刻的 MCI 坐标
-P_center_MCI_t1 = Tran_t1 * P_center(:);
+P_center_MCI_t1 = Tran_t1 * params.P_center(:);
+pr1 = [params.a0; params.b0; params.c0_pr1];
 
-% 雷达在 t1 时刻的 MCI 坐标
-pr1 = [a0; b0; c0_pr1];
-
-% 单程斜距与 t2 初值
 range_init = norm(pr1 - P_center_MCI_t1);
-t2_init = t10 + range_init / c_light;
+t2_init = params.t10 + range_init / params.c_light;
 
-%% 4. 牛顿迭代
+%% =========================
+% 5. 牛顿迭代
+% =========================
 xk = [X_init; Y_init; Z_init; t2_init];
 hk = h_init;
 
 tol = 1e-8;
 max_iter = 100;
+% is_converged = false;
 
-fprintf('初值:\n');
-fprintf('X_init  = %.12f\n', X_init);
-fprintf('Y_init  = %.12f\n', Y_init);
-fprintf('Z_init  = %.12f\n', Z_init);
-fprintf('t2_init = %.12f\n', t2_init);
-fprintf('h_init  = %.12f\n', h_init);
-
-is_converged = false;
+% fprintf('初值:\n');
+% fprintf('X_init = %.12f\n', X_init);
+% fprintf('Y_init = %.12f\n', Y_init);
+% fprintf('Z_init = %.12f\n', Z_init);
+% fprintf('t2_init = %.12f\n', t2_init);
+% fprintf('h_init = %.12f\n', h_init);
 
 for k_iter = 1:max_iter
-    % 当前 F 和 J（注意传入 hk）
+    
     Fk = F_handle(xk(1), xk(2), xk(3), xk(4), hk);
     Fk = Fk(:);
 
     Jk = J_handle(xk(1), xk(2), xk(3), xk(4), hk);
 
-    % 雅可比矩阵可逆性检查
     if rcond(Jk) < 1e-15
         warning('第 %d 次迭代时雅可比矩阵接近奇异，结果可能不稳定。', k_iter);
     end
 
-    % 求解增量（只更新 X,Y,Z,t2）
-    dx = 0.5*(-Jk \ Fk);
+    dx = 0.5 * (-Jk \ Fk);
 
-    % 更新未知量
     xk_new = xk + dx;
 
-    % =========================
-    % 用新的 [X,Y,Z] 计算新的经纬度，再由 DEM 插值得到新的 h
-    % =========================
     X_new = xk_new(1);
     Y_new = xk_new(2);
     Z_new = xk_new(3);
 
-    % MCMF -> 经纬度（弧度）
     lon_rad = atan2(Y_new, X_new);
     lat_rad = atan2(Z_new, sqrt(X_new^2 + Y_new^2));
 
-    % 弧度 -> 角度
     lon_q = rad2deg(lon_rad);
     lat_q = rad2deg(lat_rad);
 
-    % DEM 插值更新高程
-    hk_new = interp2(lon1, lat1, DEM, lon_q, lat_q, 'linear');
+    hk_new = interp2(params.lon1, params.lat1, params.DEM, lon_q, lat_q, 'linear');
 
-    % 若超出DEM范围或插值失败，可退回上一次高程
     if isnan(hk_new)
         warning('第 %d 次迭代时 DEM 插值结果为 NaN，保持上一轮高程值。', k_iter);
         hk_new = hk;
     end
 
-    % 输出当前迭代信息
-    fprintf('iter = %2d, ||F|| = %.6e, ||dx|| = %.6e, h = %.6f\n', ...
-        k_iter, norm(Fk), norm(dx), hk_new);
+    % fprintf('iter = %2d, ||F|| = %.6e, ||dx|| = %.6e, h = %.6f\n', ...
+    %     k_iter, norm(Fk), norm(dx), hk_new);
 
-    % 收敛判据（只与 dx 有关，与 h 无关）
     if norm(dx) < tol
         xk = xk_new;
         hk = hk_new;
-        is_converged = true;
-        fprintf('牛顿迭代在第 %d 次收敛。\n', k_iter);
+        % is_converged = true;
+        % fprintf('牛顿迭代在第 %d 次收敛。\n', k_iter);
         break;
     end
 
-    % 进入下一轮
     xk = xk_new;
     hk = hk_new;
 end
 
-if ~is_converged
-    warning('牛顿迭代在最大迭代次数内未收敛。');
-end
+% if ~is_converged
+%     warning('牛顿迭代在最大迭代次数内未收敛。');
+% end
 
-%% 5. 结果输出
-X_sol  = xk(1);
-Y_sol  = xk(2);
-Z_sol  = xk(3);
+%% =========================
+% 6. 结果输出
+% =========================
+X_sol = xk(1);
+Y_sol = xk(2);
+Z_sol = xk(3);
 t2_sol = xk(4);
-h_sol  = hk;
-P_x_sol =[X_sol;Y_sol;Z_sol];
+h_sol = hk;
 
-% 最终经纬度
+P_x_sol = [X_sol; Y_sol; Z_sol];
+
 lon_sol_rad = atan2(Y_sol, X_sol);
 lat_sol_rad = atan2(Z_sol, sqrt(X_sol^2 + Y_sol^2));
 
 lon_sol = rad2deg(lon_sol_rad);
 lat_sol = rad2deg(lat_sol_rad);
-
-fprintf('\n迭代结果：\n');
-fprintf('X   = %.12f\n', X_sol);
-fprintf('Y   = %.12f\n', Y_sol);
-fprintf('Z   = %.12f\n', Z_sol);
-fprintf('t2  = %.12f\n', t2_sol);
-fprintf('lon = %.12f deg\n', lon_sol);
-fprintf('lat = %.12f deg\n', lat_sol);
-fprintf('h   = %.12f m\n', h_sol);
-
-% 定位位置偏差
-fprintf('ΔX   = %.12f\n', abs(P_x(1)-X_sol));
-fprintf('ΔY   = %.12f\n', abs(P_x(2)-Y_sol));
-fprintf('ΔZ   = %.12f\n', abs(P_x(3)-Z_sol));
-fprintf('Δt   = %.12f\n', abs(t222-t2_sol));
-fprintf('三维误差 = %.12f\n', norm(P_x(:) - P_x_sol(:)));
-
-% 最终残差
-F_final = F_handle(X_sol, Y_sol, Z_sol, t2_sol, h_sol);
-F_final = F_final(:);
-FINAL = F_handle(P_x(1), P_x(2), P_x(3), t222, hm_truth);
-
-fprintf('\n迭代结果最终残差：\n');
-fprintf('F1 = %.6e\n', F_final(1));
-fprintf('F2 = %.6e\n', F_final(2));
-fprintf('F3 = %.6e\n', F_final(3));
-fprintf('F4 = %.6e\n', F_final(4));
-fprintf('||F|| = %.6e\n', norm(F_final));
-
-
-fprintf('\n理论残差：\n');
-fprintf('F1 = %.6e\n', FINAL(1));
-fprintf('F2 = %.6e\n', FINAL(2));
-fprintf('F3 = %.6e\n', FINAL(3));
-fprintf('F4 = %.6e\n', FINAL(4));
-fprintf('||F|| = %.6e\n', norm(FINAL));
-
-
-
+error_sol = norm(params.P_x(:) - P_x_sol(:));
